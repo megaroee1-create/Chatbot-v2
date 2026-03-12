@@ -77,11 +77,13 @@ def unicodeToAscii(s):
     )
 
 def normalizeString(s):
-    s = str(s) # Add this line to ensure s is always treated as a string
-    s = unicodeToAscii(s.lower().strip())
+    if not s or s is None:
+        return ""
+    s = str(s).lower().strip()
+    s = unicodeToAscii(s)
     s = re.sub(r"([.!?])", r" \1", s)
     s = re.sub(r"[^a-zA-Z.!?]+", r" ", s)
-    s = re.sub(r"\s+", r" ").strip()
+    s = re.sub(r"\s+", r" ", s).strip() # Removed the redundant strip/sub chain
     return s
 
 def indexesFromSentence(voc, sentence):
