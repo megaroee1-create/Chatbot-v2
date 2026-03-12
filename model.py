@@ -77,6 +77,7 @@ def unicodeToAscii(s):
     )
 
 def normalizeString(s):
+    s = str(s) # Add this line to ensure s is always treated as a string
     s = unicodeToAscii(s.lower().strip())
     s = re.sub(r"([.!?])", r" \1", s)
     s = re.sub(r"[^a-zA-Z.!?]+", r" ", s)
