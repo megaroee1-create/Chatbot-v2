@@ -231,47 +231,79 @@ class BeamSearchDecoder(nn.Module):
         self.encoder = encoder
         self.decoder = decoder
         self.beam_size = beam_size
+
     def forward(self, input_seq, input_length, max_length):
+        # 1. Forward input through encoder
         encoder_outputs, encoder_hidden = self.encoder(input_seq, input_length)
-        decoder_hidden = encoder_hidden[:decoder.n_layers]
-        decoder_input = torch.ones(1, 1, device=device, dtype=torch.long) * SOS_token
 
-        beams = [
-            (
-            torch.zeros([0], device = device, dtype=torch.long), #words
-            torch.zeros([0], device = device), #scores
-            decoder_hidden,
-            decoder_input,
-            0.0, #log prob
-            False  #is end of seq?
-        )
-        ]
+        # 2. Prepare encoder's final hidden layer (Copying logic from your Greedy class)
+        encoder_n_layers_actual = self.encoder.n_layers
+        forward_hidden_states = encoder_hidden[0:encoder_n_layers_actual]
+        backward_hidden_states = encoder_hidden[encoder_n_layers_actual:2*encoder_n_layers_actual]
+        combined_encoder_hidden = forward_hidden_states + backward_hidden_states
+
+        decoder_n_layers = self.decoder.n_layers
+        if decoder_n_layers <= encoder_n_layers_actual:
+            decoder_hidden = combined_encoder_hidden[:decoder_n_layers]
+        else:
+            last_combined_layer = combined_encoder_hidden[-1].unsqueeze(0)
+            num_extra_layers = decoder_n_layers - encoder_n_layers_actual
+            repeated_extra_layers = last_combined_layer.repeat(num_extra_layers, 1, 1)
+            decoder_hidden = torch.cat((combined_encoder_hidden, repeated_extra_layers), dim=0)
+
+        # 3. Initialize decoder input with SOS_token
+        decoder_input = torch.ones(1, 1, device=input_seq.device, dtype=torch.long) * SOS_token
+
+        # 4. Initialize beams: (tokens, scores, hidden, input, log_prob, ended)
+        beams = [(
+            torch.zeros([0], device=input_seq.device, dtype=torch.long), 
+            torch.zeros([0], device=input_seq.device), 
+            decoder_hidden, 
+            decoder_input, 
+            0.0, 
+            False
+        )]
+        
         eps = 1e-12
+
         for _ in range(max_length):
-          candidates = []
-          all_ended =  True
-          for tokens, scores, hidden, input, log_prob, ended in beams:
-            if ended:
-              candidates.append((tokens, scores, hidden, input, log_prob, ended))
-              continue
-            all_ended = False
-            decoder_output, decoder_hidden = self.decoder(input, hidden, encoder_outputs)
-            top_scores, top_index = torch.topk(decoder_output, self.beam_size)
-            for i in range(self.beam_size):
-              new_token = top_index[0][i].view(1)
-              new_score = top_scores[0][i].view(1)
+            candidates = []
+            all_ended = True
+            
+            for tokens, scores, current_hidden, current_input, log_prob, ended in beams:
+                if ended:
+                    candidates.append((tokens, scores, current_hidden, current_input, log_prob, ended))
+                    continue
+                
+                all_ended = False
+                # Use current_hidden (from this beam), not the global decoder_hidden
+                decoder_output, next_hidden = self.decoder(current_input, current_hidden, encoder_outputs)
+                
+                # Get probabilities
+                top_scores, top_index = torch.topk(decoder_output, self.beam_size)
+                
+                for i in range(self.beam_size):
+                    new_token = top_index[0][i].view(1)
+                    new_score = top_scores[0][i].view(1)
 
-              new_tokens = torch.cat((tokens, new_token), dim=0)
-              new_scores = torch.cat((scores, new_score), dim=0)
-              new_decoder_input = new_token.view(1,1)
-              new_log_prob = log_prob + torch.log(new_score + eps)
-              new_ended = new_token.item() == EOS_token
-              candidates.append((new_tokens, new_scores, decoder_hidden, new_decoder_input, new_log_prob, new_ended))
-          if all_ended:
-            break
-          candidates.sort(key=lambda x: x[4], reverse=True)
-          beams = candidates[:self.beam_size]
+                    new_tokens = torch.cat((tokens, new_token), dim=0)
+                    new_scores = torch.cat((scores, new_score), dim=0)
+                    new_decoder_input = new_token.view(1, 1)
+                    
+                    # Update log probability (sum of logs = log of product)
+                    new_log_prob = log_prob + torch.log(new_score + eps)
+                    new_ended = new_token.item() == EOS_token
+                    
+                    candidates.append((new_tokens, new_scores, next_hidden, new_decoder_input, new_log_prob, new_ended))
+            
+            if all_ended:
+                break
+                
+            # Sort by log probability and keep top N (beam_size)
+            candidates.sort(key=lambda x: x[4], reverse=True)
+            beams = candidates[:self.beam_size]
 
+        # Select the best beam
         best = max(beams, key=lambda x: x[4])
         return best[0], best[1]
 
