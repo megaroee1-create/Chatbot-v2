@@ -5,16 +5,16 @@ import unicodedata
 import re
 from collections import OrderedDict
 
-# --- 2. Define Global Constants (must match training) ---
+# Define Global Constants 
 PAD_token = 0  # Used for padding short sentences
-SOS_token = 1  # Start-of-sentence token
-EOS_token = 2  # End-of-sentence token
+SOS_token = 1  # Start of sentence token
+EOS_token = 2  # End of sentence token
 UNK_token = 3  # Unknown word token
-MAX_LENGTH = 10 # Maximum sentence length to consider (must match training)
+MAX_LENGTH = 10 # Maximum sentence length to consider 
 # USE_CUDA and device will typically be defined in the main application
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# --- 3. Voc Class Definition ---
+# Vocabulary Class Definition 
 class Voc:
     def __init__(self, name):
         self.name = name
@@ -69,7 +69,7 @@ class Voc:
         for word in keep_words:
             self.addWord(word)
 
-# --- 4. Data Preprocessing Helper Functions ---
+# Data Preprocessing Helper Functions 
 def unicodeToAscii(s):
     return ''.join(
         c for c in unicodedata.normalize('NFD', s)
@@ -89,7 +89,7 @@ def normalizeString(s):
 def indexesFromSentence(voc, sentence):
     return [voc.word2index.get(word, UNK_token) for word in sentence.split(' ')] + [EOS_token]
 
-# --- 5. Model Class Definitions (Encoder, Attention, Decoder, Searcher) ---
+# Model Class Definitions Encoder, Attention, Decoder, Searcher
 class EncoderRNN(nn.Module):
     def __init__(self, hidden_size, embedding, n_layers=1, dropout=0):
         super().__init__()
@@ -225,7 +225,58 @@ class GreedySearchDecoder(nn.Module):
         # Return collections of word tokens and scores
         return all_tokens, all_scores
 
-# --- 6. Evaluation Functions ---
+class BeamSearchDecoder(nn.Module):
+    def __init__(self, encoder, decoder, beam_size):
+        super(BeamSearchDecoder, self).__init__()
+        self.encoder = encoder
+        self.decoder = decoder
+        self.beam_size = beam_size
+    def forward(self, input_seq, input_length, max_length):
+        encoder_outputs, encoder_hidden = self.encoder(input_seq, input_length)
+        decoder_hidden = encoder_hidden[:decoder.n_layers]
+        decoder_input = torch.ones(1, 1, device=device, dtype=torch.long) * SOS_token
+
+        beams = [
+            (
+            torch.zeros([0], device = device, dtype=torch.long), #words
+            torch.zeros([0], device = device), #scores
+            decoder_hidden,
+            decoder_input,
+            0.0, #log prob
+            False  #is end of seq?
+        )
+        ]
+        eps = 1e-12
+        for _ in range(max_length):
+          candidates = []
+          all_ended =  True
+          for tokens, scores, hidden, input, log_prob, ended in beams:
+            if ended:
+              candidates.append((tokens, scores, hidden, input, log_prob, ended))
+              continue
+            all_ended = False
+            decoder_output, decoder_hidden = self.decoder(input, hidden, encoder_outputs)
+            top_scores, top_index = torch.topk(decoder_output, self.beam_size)
+            for i in range(self.beam_size):
+              new_token = top_index[0][i].view(1)
+              new_score = top_scores[0][i].view(1)
+
+              new_tokens = torch.cat((tokens, new_token), dim=0)
+              new_scores = torch.cat((scores, new_score), dim=0)
+              new_decoder_input = new_token.view(1,1)
+              new_log_prob = log_prob + torch.log(new_score + eps)
+              new_ended = new_token.item() == EOS_token
+              candidates.append((new_tokens, new_scores, decoder_hidden, new_decoder_input, new_log_prob, new_ended))
+          if all_ended:
+            break
+          candidates.sort(key=lambda x: x[4], reverse=True)
+          beams = candidates[:self.beam_size]
+
+        best = max(beams, key=lambda x: x[4])
+        return best[0], best[1]
+
+
+# Evaluation Functions ---
 def evaluate(encoder, decoder, searcher, voc, sentence, device, max_length=MAX_LENGTH):
     """
     Evaluate a single input sentence using greedy decoding.
