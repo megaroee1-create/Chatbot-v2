@@ -3,7 +3,7 @@ import torch
 import json
 import os
 import gdown
-from model import Voc, EncoderRNN, LuongAttnDecoderRNN, GreedySearchDecoder, normalizeString, evaluate
+from model import Voc, EncoderRNN, LuongAttnDecoderRNN, GreedySearchDecoder, BeamSearchDecoder, normalizeString, evaluate
 
 # Weights are too heavy to be saved on github, so instead they are uploaded from drive when the code is run:
 def download_weights():
